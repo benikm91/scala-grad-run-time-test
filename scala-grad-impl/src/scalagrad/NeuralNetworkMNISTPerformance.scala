@@ -4,7 +4,10 @@ import breeze.linalg.*
 import scalagrad.Util.*
 import scalagrad.api.matrixalgebra.MatrixAlgebraDSL
 import scalagrad.auto.breeze.BreezeFloatMatrixAlgebraDSL
+import scalagrad.auto.predef.PredefFloatMatrixAlgebraDSL
 
+import java.nio.charset.StandardCharsets
+import java.nio.file.{Files, Paths}
 import scala.annotation.tailrec
 
 object NeuralNetworkMNISTPerformance:
@@ -24,8 +27,9 @@ object NeuralNetworkMNISTPerformance:
 
         // CONFIG
         val batchSize = 64
-        val nHiddenUnits = 36
-        val epochs = 2
+        val nHiddenUnitList = List(512) // List(8, 16, 32, 64, 128, 256)
+        val nRuns = 1
+        val epochs = 10
         val lr = 0.01f
 
         val nFeatures = MNISTDataSet.nFeatures
@@ -35,17 +39,7 @@ object NeuralNetworkMNISTPerformance:
         val xsTrain = xsTrainDouble.map(_.map(_.toFloat))
         val ysTrain = ysTrainDouble.map(_.map(_.toFloat))
         val eagerData = xsTrain.zip(ysTrain).toList
-                
-        def getRandomWeights(nFeatures: Int, nHiddenUnits: Int, nOutputUnits: Int): 
-            (DenseVector[Float], DenseMatrix[Float], DenseVector[Float], DenseMatrix[Float]) = 
-            val rand = scala.util.Random(42)
-            (
-                DenseVector.fill(nHiddenUnits)(rand.nextFloat() - 0.5f),
-                DenseMatrix.fill(nFeatures, nHiddenUnits)(rand.nextFloat() - 0.5f),
-                DenseVector.fill(nOutputUnits)(rand.nextFloat() - 0.5f),
-                DenseMatrix.fill(nHiddenUnits, nOutputUnits)(rand.nextFloat() - 0.5f),
-            )
-            
+
         def loss(xs: DenseMatrix[Float], ys: DenseMatrix[Float])(alg: MatrixAlgebraDSL)(
             p: Parameters[alg.ColumnVector, alg.Matrix]
         ): alg.Scalar =
@@ -79,10 +73,10 @@ object NeuralNetworkMNISTPerformance:
                     ),
                     lr,
                 )
-        
-        def getRandomParametersFloat(nFeatures: Int, nHiddenUnits: Int, nOutputUnits: Int): 
-            Parameters[DenseVector[Float], DenseMatrix[Float]] = 
-            val rand = scala.util.Random(42)
+
+        def getRandomParametersFloat(nFeatures: Int, nHiddenUnits: Int, nOutputUnits: Int):
+            Parameters[DenseVector[Float], DenseMatrix[Float]] =
+            val rand = scala.util.Random()
             Parameters(
                 DenseVector.fill(nHiddenUnits)(rand.nextFloat() - 0.5f),
                 DenseMatrix.fill(nFeatures, nHiddenUnits)(rand.nextFloat() - 0.5f),
@@ -116,33 +110,49 @@ object NeuralNetworkMNISTPerformance:
         val xsTest = xsTestDouble.map(_.map(_.toFloat))
         val ysTest = ysTestDouble.map(_.map(_.toFloat))
 
-        // Initialize weights
-        val initialParams = getRandomParametersFloat(nFeatures, nHiddenUnits, nOutputUnits)
+        case class Sample(experimentId: Int, epoch: Int, elapsedTrainTime: Double, elapsedTestTime: Double, testAccuracy: Float)
 
-        case class Sample(val epoch: Int, elapsedTime: Double, testAccuracy: Float)
+        // WARM UP JVM
+        (1 to 2).foldLeft(getRandomParametersFloat(nFeatures, 8, nOutputUnits)) {
+            case (currentParams, epoch) =>
+                println(f"WARUM UP epoch ${epoch}")
+                val nextParams = miniBatchGradientDescent(eagerData)(currentParams, lr)
+                val testAccuracy = logPerformance(xsTest, ysTest)(nextParams)
+                nextParams
+        }
+        Thread.sleep(2000) // sleep 2s between runs => GC
 
-        val measurements = List[Sample]()
+        var measurements = List[Sample]()
 
-        // Run miniBatchGradientDescent {epochs} number of times
-        val finalParams = 
-            (1 to epochs).foldLeft(initialParams) {
-                case (currentParams, epoch) =>
-                    println(f"epoch ${epoch}")
-                    val (nextParams, elapsedTime) = timeMeasure {
-                        miniBatchGradientDescent(eagerData)(currentParams, lr)
-                    }
-                    val testAccuracy = logPerformance(xsTest, ysTest)(nextParams)
-                    measurements.appended(Sample(
-                        epoch, elapsedTime, testAccuracy
-                    ))
-                    nextParams
-            }
+        nHiddenUnitList.map(nHiddenUnits => {
+            var measurements = List[Sample]()
 
-        def sampleHeader: String = "epoch,elapsedTime,testAccuracy"
-        def sampleToCSV(s: Sample): String = f"${s.epoch},${s.elapsedTime},${s.testAccuracy}"
-        val csv = sampleHeader + "\n" + measurements.map(sampleToCSV).mkString("\n")
-        println(csv)
+            // Run miniBatchGradientDescent {epochs} number of times
+            (1 to nRuns).foreach(experimentId => {
+                // Initialize weights
+                val initialParams = getRandomParametersFloat(nFeatures, nHiddenUnits, nOutputUnits)
+                (1 to epochs).foldLeft(initialParams) {
+                    case (currentParams, epoch) =>
+                        println(f"epoch ${epoch}")
+                        val (nextParams, elapsedTrainTime) = timeMeasure {
+                            miniBatchGradientDescent(eagerData)(currentParams, lr)
+                        }
+                        val (testAccuracy, elapsedTestTime) = timeMeasure {
+                            logPerformance(xsTest, ysTest)(nextParams)
+                        }
+                        measurements = measurements.appended(Sample(
+                            experimentId, epoch, elapsedTrainTime, elapsedTestTime, testAccuracy
+                        ))
+                        nextParams
+                }
+                Thread.sleep(2000)  // sleep 2s between runs => GC
+            })
 
+            def sampleHeader: String = "experiment_id,epoch,elapsed_train_time,elapsed_test_time,test_acc"
+            def sampleToCSV(s: Sample): String = f"${s.experimentId},${s.epoch},${s.elapsedTrainTime},${s.elapsedTestTime},${s.testAccuracy}"
+            val csv = sampleHeader + "\n" + measurements.map(sampleToCSV).mkString("\n")
+            Files.write(Paths.get(f"out/scalagrad_results_$nHiddenUnits.csv"), csv.getBytes(StandardCharsets.UTF_8))
+        })
 
 
 object TimeUtil:
@@ -157,9 +167,9 @@ object TimeUtil:
         println("Elapsed time: " + ds + "s")
         result
 
-    def timeMeasure[R](block: => R, unit: TimeUnit = TimeUnit.SECONDS): (R, Double) =
+    def timeMeasure[R](block: => R): (R, Double) =
         val t0 = System.nanoTime()
         val result = block    // call-by-name
         val t1 = System.nanoTime()
-        val ds = unit.convert(t1 - t0, TimeUnit.NANOSECONDS)
+        val ds = (t1 - t0) / 1_000_000_000.0
         (result, ds)

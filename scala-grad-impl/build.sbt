@@ -14,9 +14,10 @@ lazy val breezeDependency = Seq(
 
 lazy val scalaGradDependency = Seq(
     libraryDependencies ++= Seq(
-      ("ch.benikm91"  %%  "scala-grad" % "0.9.0"),
-      ("ch.benikm91"  %%  "scala-grad-api" %"0.9.0"),
-      ("ch.benikm91"  %%   "scala-grad-auto-breeze" % "0.9.0"),
+      ("ch.benikm91"  %%  "scala-grad" % "0.9.1" changing()),
+      ("ch.benikm91"  %%  "scala-grad-api" %"0.9.1" changing()),
+      ("ch.benikm91"  %%  "scala-grad-auto-breeze" % "0.9.1" changing()),
+      ("ch.benikm91"  %%  "scala-grad-auto-predef" % "0.9.1" changing()),
     )
 )
 
